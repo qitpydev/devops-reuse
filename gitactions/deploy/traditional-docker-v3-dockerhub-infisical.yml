@@ -1,0 +1,144 @@
+name: Push Images to Docker Hub and Deploy
+on:
+  push:
+    branches: ["dev", "stg", "prod", "ci-test"]
+
+env:
+  ENV: ${{ github.ref_name }}
+
+  SERVER_USER: smartdev
+  SERVER_KEY: ${{ secrets.SERVER_KEY_DEV }}
+  SERVER_HOST: ${{ github.ref_name == 'dev' && secrets.SERVER_HOST_DEV || github.ref_name == 'stg' && secrets.SERVER_HOST_STG || github.ref_name == 'ci-test' && secrets.SERVER_HOST_DEV }}
+  SERVER_PORT: ${{ github.ref_name == 'dev' && 2020 || github.ref_name == 'stg' && 22 }}
+
+  DOCKER_TAG: ${{ github.run_number }}
+  DOCKER_IMAGE: "synapsemarketplace/ailab-ai-be-${{ github.ref_name }}"
+  DOCKER_IMAGE_CRONJOB: "synapsemarketplace/ailab-ai-be-cronjob-${{ github.ref_name }}"
+  DOCKER_USER: ${{ secrets.DOCKERHUB_USER }}
+  DOCKER_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+  DOCKER_NAME: "ailab-ai-be"
+  DOCKER_NAME_CRONJOB: "ailab-ai-be-cronjob"
+  DOCKER_NETWORK: "synapse"
+
+  APP_OPENAI_API_KEY: ${{ secrets.APP_OPENAI_API_KEY }}
+  APP_CHROMA_API_KEY: ${{ github.ref_name == 'dev' && 'OTwAWFqUve3xZBRfK1o7ZDQJgyf6l0gS_dev' || github.ref_name == 'stg' && 'OTwAWFqUve3xZBRfK1o7ZDQJgyf6l0gS_stg'}}
+  APP_CHROMA_HOST: ${{ secrets.APP_CHROMA_HOST }}
+  APP_CHROMA_PORT: ${{ secrets.APP_CHROMA_PORT }}
+
+  APP_JWT_TOKEN_EXPIRE: ${{ secrets.APP_JWT_TOKEN_EXPIRE }}
+  APP_JWT_SECRET_KEY: ${{ secrets.APP_JWT_SECRET_KEY }}
+
+  APP_MYSQL_HOST: ${{ github.ref_name == 'dev' && secrets.APP_MYSQL_HOST || github.ref_name == 'stg' && 'mysql' }}
+  APP_MYSQL_PORT: ${{ github.ref_name == 'dev' && secrets.APP_MYSQL_PORT || github.ref_name == 'stg' && 3306 }}
+  APP_MYSQL_USERNAME: ${{ github.ref_name == 'dev' && secrets.APP_MYSQL_USERNAME || github.ref_name == 'stg' && 'smart_devsynapse' }}
+  APP_MYSQL_PASSWORD: ${{ github.ref_name == 'dev' && secrets.APP_MYSQL_PASSWORD || github.ref_name == 'stg' && 'bNnxqLQFSWGSB2p' }}
+  APP_MYSQL_DB: ${{ github.ref_name == 'dev' && secrets.APP_MYSQL_DB || github.ref_name == 'stg' && 'smart_devsynapse' }}
+
+jobs:
+  deploy-app-api:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKER_USER }}
+          password: ${{ env.DOCKER_TOKEN }}
+
+      - name: Update Dockerfile label
+        run: |
+          URI="api.${{ github.ref_name }}.synapse.smartdev.com"
+          sed -i "s|URI|$URI|g" Dockerfile
+          cat Dockerfile
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }} \
+            --build-arg OPENAI_API_KEY=${{ env.APP_OPENAI_API_KEY }} \
+            --build-arg CHROMA_API_KEY=${{ env.APP_CHROMA_API_KEY }} \
+            --build-arg CHROMA_HOST=${{ env.APP_CHROMA_HOST }} \
+            --build-arg CHROMA_PORT=${{ env.APP_CHROMA_PORT }} \
+            --build-arg JWT_TOKEN_EXPIRE=${{ env.APP_JWT_TOKEN_EXPIRE }} \
+            --build-arg JWT_SECRET_KEY=${{ env.APP_JWT_SECRET_KEY }} \
+            --build-arg MYSQL_HOST=${{ env.APP_MYSQL_HOST }} \
+            --build-arg MYSQL_PORT=${{ env.APP_MYSQL_PORT }} \
+            --build-arg MYSQL_USERNAME=${{ env.APP_MYSQL_USERNAME }} \
+            --build-arg MYSQL_PASSWORD="${{ env.APP_MYSQL_PASSWORD }}" \
+            --build-arg MYSQL_DB=${{ env.APP_MYSQL_DB }} \
+            .
+
+      - name: Tag Docker image
+        run: docker tag ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }} ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
+
+      - name: Push Docker image
+        run: docker push ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
+
+      - name: Rollout update
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ secrets.SERVER_KEY_DEV }}
+          port: ${{ env.SERVER_PORT }}
+          script: |
+            echo ${{ env.DOCKER_TOKEN }} | docker login --username ${{ env.DOCKER_USER }} --password-stdin
+            docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
+            docker stop ${{ env.DOCKER_NAME }}
+            docker rm ${{ env.DOCKER_NAME }}
+            docker run -d --name ${{ env.DOCKER_NAME }} --network ${{ env.DOCKER_NETWORK }} --restart always ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
+
+  deploy-cronjob:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKER_USER }}
+          password: ${{ env.DOCKER_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.DOCKER_IMAGE_CRONJOB }}:${{ env.DOCKER_TAG }} \
+            --build-arg OPENAI_API_KEY=${{ env.APP_OPENAI_API_KEY }} \
+            --build-arg CHROMA_API_KEY=${{ env.APP_CHROMA_API_KEY }} \
+            --build-arg CHROMA_HOST=${{ env.APP_CHROMA_HOST }} \
+            --build-arg CHROMA_PORT=${{ env.APP_CHROMA_PORT }} \
+            --build-arg JWT_TOKEN_EXPIRE=${{ env.APP_JWT_TOKEN_EXPIRE }} \
+            --build-arg JWT_SECRET_KEY=${{ env.APP_JWT_SECRET_KEY }} \
+            --build-arg MYSQL_HOST=${{ env.APP_MYSQL_HOST }} \
+            --build-arg MYSQL_PORT=${{ env.APP_MYSQL_PORT }} \
+            --build-arg MYSQL_USERNAME=${{ env.APP_MYSQL_USERNAME }} \
+            --build-arg MYSQL_PASSWORD="${{ env.APP_MYSQL_PASSWORD }}" \
+            --build-arg MYSQL_DB=${{ env.APP_MYSQL_DB }} \
+            -f Dockerfile.cronjob .
+
+      - name: Tag Docker image
+        run: docker tag ${{ env.DOCKER_IMAGE_CRONJOB }}:${{ env.DOCKER_TAG }} ${{ env.DOCKER_IMAGE_CRONJOB }}:${{ env.DOCKER_TAG }}
+
+      - name: Push Docker image
+        run: docker push ${{ env.DOCKER_IMAGE_CRONJOB }}:${{ env.DOCKER_TAG }}
+
+      - name: Rollout update
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ secrets.SERVER_KEY_DEV }}
+          port: ${{ env.SERVER_PORT }}
+          script: |
+            echo ${{ env.DOCKER_TOKEN }} | docker login --username ${{ env.DOCKER_USER }} --password-stdin
+            docker pull ${{ env.DOCKER_IMAGE_CRONJOB }}:${{ env.DOCKER_TAG }}
+            docker stop ${{ env.DOCKER_NAME_CRONJOB }}
+            docker rm ${{ env.DOCKER_NAME_CRONJOB }}
+            docker run -d --name ${{ env.DOCKER_NAME_CRONJOB }} --network ${{ env.DOCKER_NETWORK }} --restart always ${{ env.DOCKER_IMAGE_CRONJOB }}:${{ env.DOCKER_TAG }}

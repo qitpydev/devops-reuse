@@ -1,0 +1,24 @@
+services:
+
+  mongo:
+    image: mongo:8.0.0
+    restart: unless-stopped
+    volumes:
+      - ./data:/data/db
+      - ./conf/mongod.conf.orig:/etc/mongod.conf.orig
+    ports:
+      - 27017:27017
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: v11RaVe5inTR
+
+  mongo-express:
+    image: mongo-express
+    restart: always
+    ports:
+      - 8081:8081
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: v11RaVe5inTR
+      ME_CONFIG_MONGODB_URL: mongodb://root:v11RaVe5inTR@mongo:27017/
+      ME_CONFIG_BASICAUTH: false

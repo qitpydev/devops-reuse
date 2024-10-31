@@ -1,0 +1,98 @@
+name: Deploy to VM
+on:
+  push:
+    branches: ["dev"]
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+
+env:
+  BRANCH_NAME: ${{ github.ref_name }}
+  DOCKER_TAG: ${{ github.sha }}
+  DOCKER_NETWORK: "tx"
+  DOCKER_APP_NAME: "backend-api-nestjs"
+
+  REPO_SSH_URL: "git@github.com:{Org-Name}/{Repo-Name}.git"
+
+  INFISICAL_PROJECT_ID: "74d2a03d-3344-4456-bcf4-581c19a6bf29"
+  INFISICAL_PATH: "/path-to-secrets"
+  INFISICAL_ENV: "dev"
+
+  DOMAIN_URL: "app.your-domain.com"
+jobs:
+  # Deploy without Registry for now
+  deploy-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch the newest code from the repository
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_KEY }}
+          port: 22
+          script: |
+            # check if the folder exists, if not, create it
+            if [ ! -d /home/${{ secrets.SERVER_USER }}/Repositories ]; then
+              mkdir /home/${{ secrets.SERVER_USER }}/Repositories
+            fi
+
+            # check if the repository exists, if not, clone it
+            if [ ! -d /home/${{ secrets.SERVER_USER }}/Repositories/${{ env.DOCKER_APP_NAME }} ]; then
+              git clone ${{ env.REPO_SSH_URL }} /home/${{ secrets.SERVER_USER }}/Repositories/${{ env.DOCKER_APP_NAME }}
+            fi
+
+            cd /home/${{ secrets.SERVER_USER }}/Repositories/${{ env.DOCKER_APP_NAME }} && \
+            git reset --hard && \
+            git fetch --all && \
+            git checkout ${{ env.BRANCH_NAME }} && \
+            git reset --hard origin/${{ env.BRANCH_NAME }}
+
+            # Update Dockerfile label for domain
+            DOMAIN_URL=${{ env.DOMAIN_URL }}
+            sed -i "s|URL|$DOMAIN_URL|g" /home/${{ secrets.SERVER_USER }}/Repositories/${{ env.DOCKER_APP_NAME }}/Dockerfile
+            cat /home/${{ secrets.SERVER_USER }}/Repositories/${{ env.DOCKER_APP_NAME }}/Dockerfile
+
+      - name: Install Infisical CLI
+        run: |
+          curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo -E bash
+          sudo apt-get update && sudo apt-get install -y infisical
+          export INFISICAL_TOKEN=$(infisical login --method=universal-auth --client-id=${{ secrets.INFISICAL_SECRET_ID }} --client-secret=${{ secrets.INFISICAL_SECRET_KEY }} --plain --silent)
+          infisical export --env=${{ env.INFISICAL_ENV }} --projectId=${{ env.INFISICAL_PROJECT_ID }}  --format=dotenv --path=${{ ENV.INFISICAL_PATH }} > ~/.temp.env
+          sed "s/'//g" ~/.temp.env > ~/.env
+
+      - name: Copy env file to VM
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.env ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/${{ secrets.SERVER_USER }}/Repositories/${{ env.DOCKER_APP_NAME }}/.env
+
+      - name: Docker build
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          command_timeout: 40m
+          key: ${{ secrets.SERVER_KEY }}
+          port: 22
+          script: |
+            cd /home/${{ secrets.SERVER_USER }}/Repositories/${{ env.DOCKER_APP_NAME }} && \
+            docker build -t ${{ env.DOCKER_APP_NAME }}:${{ env.DOCKER_TAG }} .
+
+      - name: Rollout Update
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_KEY }}
+          port: 22
+          script: |
+            docker stop ${{ env.DOCKER_APP_NAME }} || true
+            docker rm ${{ env.DOCKER_APP_NAME }} || true
+            cd /home/${{ secrets.SERVER_USER }}/Repositories/${{ env.DOCKER_APP_NAME }} && \
+            docker run -d --name ${{ env.DOCKER_APP_NAME }} --network ${{ env.DOCKER_NETWORK }} --env-file .env --restart always ${{ env.DOCKER_APP_NAME }}:${{ env.DOCKER_TAG }}
