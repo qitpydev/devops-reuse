@@ -1,0 +1,21 @@
+services:
+  reverse-proxy:
+    # The official v3 Traefik docker image
+    image: traefik:v3.0
+    ports:
+      # The HTTP port
+      - "80:80"
+      # The Web UI (enabled by --api.insecure=true)
+      - "8080:8080"
+      - "443:443"
+    volumes:
+      # So that Traefik can listen to the Docker events
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik/traefik.yml:/traefik.yml:ro
+      - traefik/acme:/etc/traefik/acme
+    labels:
+      traefik.enable: "true"
+      traefik.http.services.traefik.loadbalancer.server.port: "8080"
+      traefik.http.routers.traefik.rule: "Host(`your-domain`)"
+      traefik.http.routers.traefik.entrypoints: "web, websecure"
+      traefik.http.routers.traefik.tls.certresolver: "production"
