@@ -1,0 +1,7 @@
+users:
+    dev:
+        email: yourname@changeme.com
+        name: dev
+        # user | password: dev | ySIgaGEntIckmagWArLin
+        # review document on how to generate a password hash, by simple using docker run .... to generate
+        password: $2a$11$NritHY7sXXJnEQghPauLS.hjbodbD6Ye6zSnjHoyowq7m5KNCfY46
