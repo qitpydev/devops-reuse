@@ -1,0 +1,21 @@
+# this run Terraform command with the given arguments:
+# I. First argument is: dev, uat, prod
+# II. Second argument is: init, plan, apply, output
+# for more arguments
+# -
+
+env=$1
+command=$2
+
+if [ -z "$command" ] || [ -z "$env" ]; then
+  echo "Usage: $0 <command> <env>"
+  echo "Example for development environment: $0 init dev"
+  exit 1
+fi
+
+# if command == output, then auto add -json
+if [ "$command" == "output" ]; then
+  command="output -json"
+fi
+
+terraform -chdir=environments/${env} $command #-var-file="secret.tfvars"
